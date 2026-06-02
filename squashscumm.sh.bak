@@ -1,0 +1,179 @@
+#!/bin/bash
+
+set -xuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+CONFIG_NAME="squashscumm.conf"
+
+find_config() {
+
+    # Explicit config passed on command line
+    if [ $# -gt 0 ] && [ -n "$1" ]; then
+        [ -f "$1" ] && {
+            echo "$1"
+            return 0
+        }
+
+        echo "Specified config not found: $1" >&2
+        return 1
+    fi
+
+    # Same directory as script
+    if [ -f "$SCRIPT_DIR/$CONFIG_NAME" ]; then
+        echo "$SCRIPT_DIR/$CONFIG_NAME"
+        return 0
+    fi
+
+    # XDG_CONFIG_HOME
+    if [ -n "${XDG_CONFIG_HOME:-}" ] &&
+       [ -f "$XDG_CONFIG_HOME/squashscumm/$CONFIG_NAME" ]; then
+        echo "$XDG_CONFIG_HOME/squashscumm/$CONFIG_NAME"
+        return 0
+    fi
+
+    # Default XDG location
+    if [ -f "$HOME/.config/squashscumm/$CONFIG_NAME" ]; then
+        echo "$HOME/.config/squashscumm/$CONFIG_NAME"
+        return 0
+    fi
+
+    # System-wide
+    if [ -f "/etc/$CONFIG_NAME" ]; then
+        echo "/etc/$CONFIG_NAME"
+        return 0
+    fi
+
+    return 1
+}
+
+CONFIG_FILE="$(find_config "${1:-}")"
+
+if [ -z "$CONFIG_FILE" ]; then
+    echo "No configuration file found."
+    echo
+    echo "Looked in:"
+    echo "  $SCRIPT_DIR/$CONFIG_NAME"
+    echo "  \$XDG_CONFIG_HOME/squashscumm/$CONFIG_NAME"
+    echo "  ~/.config/squashscumm/$CONFIG_NAME"
+    echo "  /etc/$CONFIG_NAME"
+    exit 1
+fi
+
+echo "Using config: $CONFIG_FILE"
+
+# shellcheck source=/dev/null
+source "$CONFIG_FILE"
+
+# Validate configuration
+for VAR in SOURCE_DIR OUTPUT_DIR BACKUP_DIR; do
+    if [ -z "${!VAR:-}" ]; then
+        echo "Missing required configuration variable: $VAR"
+        exit 1
+    fi
+done
+
+mkdir -p "$OUTPUT_DIR"
+mkdir -p "$BACKUP_DIR"
+
+echo "Source : $SOURCE_DIR"
+echo "Output : $OUTPUT_DIR"
+echo "Backup : $BACKUP_DIR"
+echo
+
+while IFS= read -r GAME_DIR; do
+
+    echo "Processing: $(basename "$GAME_DIR")"
+
+    mapfile -t SCUMMVM_FILES < <(
+        find "$GAME_DIR" -maxdepth 1 -type f -name "*.scummvm" | sort
+    )
+
+    if [ "${#SCUMMVM_FILES[@]}" -eq 0 ]; then
+        echo "  No .scummvm file found. Skipping."
+        echo
+        continue
+    fi
+
+    if [ "${#SCUMMVM_FILES[@]}" -eq 1 ]; then
+        CHOSEN_FILE="${SCUMMVM_FILES[0]}"
+    else
+        echo "  Multiple .scummvm files found:"
+        echo
+
+        for i in "${!SCUMMVM_FILES[@]}"; do
+            printf "    %2d) %s\n" \
+                $((i + 1)) \
+                "$(basename "${SCUMMVM_FILES[$i]}")"
+        done
+
+        echo
+
+    while true; do
+        read -rp "Select file [1-${#SCUMMVM_FILES[@]}]: " CHOICE < /dev/tty || exit 1
+
+        if [[ "$CHOICE" =~ ^[0-9]+$ ]] &&
+           (( CHOICE >= 1 && CHOICE <= ${#SCUMMVM_FILES[@]} ))
+        then
+            break
+        fi
+
+        echo "Invalid selection."
+    done
+
+        CHOSEN_FILE="${SCUMMVM_FILES[$((CHOICE - 1))]}"
+        echo
+        echo "Selected: $(basename "$CHOSEN_FILE")"
+        echo
+        echo "Selected: $CHOSEN_FILE"
+        echo "About to run mksquashfs..."
+    fi
+
+    GAME_NAME="$(basename "$CHOSEN_FILE" .scummvm)"
+    OUTPUT_FILE="$OUTPUT_DIR/${GAME_NAME}.squashfs"
+
+    if [ -e "$OUTPUT_FILE" ]; then
+        echo "  Output already exists:"
+        echo "  $OUTPUT_FILE"
+        echo "  Skipping."
+        echo
+        continue
+    fi
+
+    echo "  Creating squashfs..."
+    echo "  -> $OUTPUT_FILE"
+
+    if mksquashfs \
+        "$GAME_DIR" \
+        "$OUTPUT_FILE" \
+        ${MKSQUASHFS_OPTS:-}
+        echo "Command:"
+        echo mksquashfs "$GAME_DIR" "$OUTPUT_FILE" ${MKSQUASHFS_OPTS:-}
+    then
+        echo "  Success."
+
+        DEST="$BACKUP_DIR/$(basename "$GAME_DIR")"
+
+        if [ -e "$DEST" ]; then
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            DEST="${DEST}-${TIMESTAMP}"
+        fi
+
+        mv "$GAME_DIR" "$DEST"
+
+        echo "  Moved to backup:"
+        echo "  -> $DEST"
+    else
+        echo "  mksquashfs failed."
+    fi
+
+    echo "mksquashfs finished with exit code $?"
+
+
+    echo
+
+done < <(
+    find "$SOURCE_DIR" -mindepth 1 -maxdepth 1 -type d | sort
+)
+
+echo "Finished."
