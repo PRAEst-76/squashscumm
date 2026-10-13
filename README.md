@@ -7,5 +7,7 @@ scummvm (rom) directory, squashfs file directory and backup dir are configurable
 
 Script will prompt if multiple .scummvm files are found
 
+I've included an unsquash script to reverse the process if you wanted to use your collection with another front-end or scummvm on it's own.
+
 > [!NOTE]
-> SquashFS is NOT supported in the scummvm libretro (Retroarch) core as of writing.
+> SquashFS is NOT supported in the scummvm itself or scummvm libretro (Retroarch) core as of writing, and requires the files to be accessed via Batocera or similar.
